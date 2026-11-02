@@ -4,7 +4,7 @@
 # 竞价判断.py 会把这里的组合和 合约.txt 的一起判断（这里有、合约.txt 没有的也判断，只是开盘后不取 tick、不复盘）。
 # 换了图就改这里，再跑一次：python 竞价浮层.py --test
 INE.sc2701,INE.sc2612    INE.nr2612,SHFE.ru2701    SHFE.fu2612,SHFE.fu2701    SHFE.bu2612,SHFE.bu2701
-SHFE.ss2701,SHFE.ss2612  SHFE.br2701,SHFE.br2612   SHFE.fu2702,SHFE.fu2701    INE.nr2701,INE.nr2612
+SHFE.ss2701,SHFE.ss2612  SHFE.br2701,SHFE.br2612   SHFE.fu2702,SHFE.fu2701    INE.sc2702,INE.sc2612
 SHFE.ao2702,SHFE.ao2701  SHFE.cu2611,SHFE.cu2612   SHFE.al2611,SHFE.al2612    SHFE.ag2701,SHFE.ag2612
 SHFE.ao2612,SHFE.ao2701  SHFE.ru2705,SHFE.ru2701   SHFE.hc2705,SHFE.hc2701    SHFE.ag2702,SHFE.ag2612
 
@@ -21,6 +21,8 @@ SHFE.ao2612,SHFE.ao2701  SHFE.ru2705,SHFE.ru2701   SHFE.hc2705,SHFE.hc2701    SH
 # 公式宽：格子左边到公式那一行最长写到哪（品种名四个字 + 价差四位，如「合成橡胶2701-合成橡胶2612 -999」），
 # 标签第一行不越过这里；放不下就把「半…」挪到第二行。10-29 晚在截图上量的。
 公式宽 = 410
+# 公式左：格子左边到公式那一行第一个字（「套利分析」的「套」）多远，标签和竞价手数框左边对齐这里。11-02 夜量的。
+公式左 = 66
 # 菜单栏空白处的小提示（等竞价、出错时的红字）
 提示左 = 560
 提示上 = 2
