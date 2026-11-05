@@ -11,7 +11,7 @@ $Repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $To = Join-Path $Repo "开盘tick"
 if (-not (Test-Path (Join-Path $From "竞价判断.py"))) { Write-Host "✘ 找不到 $From\竞价判断.py" -ForegroundColor Red; exit 1 }
 
-$files = @("竞价判断.py", "竞价浮层.py", "关浮层.pyw", "开盘tick.py", "开盘复盘.py", "开盘预估.py", "外盘涨跌.py", "说明.md")
+$files = @("竞价判断.py", "竞价浮层.py", "关浮层.pyw", "开盘tick.py", "开盘复盘.py", "成交模型.py", "开盘预估.py", "外盘涨跌.py", "说明.md")  # 成交模型.py：开盘复盘.py 的排队版模拟要用（11-05 加）
 foreach ($f in $files) { Copy-Item (Join-Path $From $f) (Join-Path $To $f) -Force }
 Copy-Item (Join-Path $From "看板.txt") (Join-Path $To "看板.示例.txt") -Force
 Get-ChildItem (Join-Path $From "复盘数据") -File | Where-Object { $_.Name -like "两年回放_*.csv" -or $_.Name -eq "腿2盘口_sc.csv" } |
