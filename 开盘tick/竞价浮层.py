@@ -373,7 +373,7 @@ DOWN = {"重": "打", "打": "小", "小": "小"}
 
 def verdict(key: str, kind: str, tags) -> tuple[str, str] | None:
     """浮层色块：(重 / 打 / 小 / 关, 原因)；没针、不判断返回 None（不贴色块，标签照老样子）。
-    规则照 分析/2026-10-31/有色开盘/小结.md 第 9 节的手数表，10-31 晚他定了两处：腿2秒进降一级；
+    规则照 分析/2026-10-31/有色开盘/小结.md 第 9 节的手数表，10-31 晚他定了两处：腿2秒进降一级（11-06 改成一律「小」，判 ❌、关的照旧关）；
     sc nr fu bu 和 ss br ao sp rb hc ru 不重也算「打」。只是线索，不是买卖建议。"""
     if kind in ("没针", "不判断"):
         return None
@@ -387,6 +387,8 @@ def verdict(key: str, kind: str, tags) -> tuple[str, str] | None:
     if heavy is None:
         if "不重" in names or p in OFF_WHEN_LIGHT:
             return "关", "不重"
+        if "腿2秒进" in names:  # 11-06 起不重也可能贴腿2秒进：一律小
+            return "小", "不重·腿2秒进"
         return ("小" if p in SMALL_WHEN_LIGHT else "打"), "不重"
     why = [f"重{heavy:g}"]
     level = "重" if heavy >= 3 else "打"
@@ -395,9 +397,9 @@ def verdict(key: str, kind: str, tags) -> tuple[str, str] | None:
         level = DOWN[level] if level == "重" else level
     if p in CAP_NORMAL and level == "重":
         level = "打"
-    if "腿2秒进" in names:
-        why.append("腿2秒进↓")
-        level = DOWN[level]
+    if "腿2秒进" in names:  # 11-06 他定的：有腿2秒进一律「小」（以前是降一级，重 → 打）
+        why.append("腿2秒进")
+        level = "小"
     return level, "·".join(why)
 
 

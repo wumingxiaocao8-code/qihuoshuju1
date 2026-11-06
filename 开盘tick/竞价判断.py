@@ -34,6 +34,7 @@
   立刻能成交那边偏出门槛 2 倍以上 = 大机会，记「重3.6」（几倍门槛）；再看两件事：
   主力（腿2）竞价跳空比腿1 小 → 加「腿2秒进」（腿2 晚两秒才进多半亏，10.8 那种）；
   冷门腿竞价不到持仓 0.7‰ → 加「量少」（开盘第一个半秒能成交的手数只有其他大机会的一半到三分之二）。
+  「腿2秒进」11-06 起不跟着重仓标记走：有针、主力动得少就在浮层上贴（LEG2_ALWAYS），csv 的「重仓标记」照旧只在大机会时写。
   浮层上只在 HEAVY_SHOW 的品种（sc、nr，10-27 晚起加 fu、bu，10-31 起加有色 ag cu al zn pb sn ni 和 ao br sp rb hc ru ss，11-05 晚加跨品种 nr-ru）的格子上贴，别的品种只记进 csv 和网页。
 跨品种 nr-ru（11-05 晚）：门槛 8 档，混合版、差门槛 1/3（3 档）不判 ❌、≥ 2 倍不判 ❌ 照同品种那套，不放宽；首笔区间用两年 L2 种子、八成范围（后一年包住 84%）。
   见 测试/2026-11-05_nr-ru门槛/小结.md。别的跨品种组合没定门槛，照旧「？」。
@@ -123,6 +124,7 @@ HEAVY_SHOW = ("sc", "nr", "fu", "bu", "ag", "cu", "al", "zn", "pb", "sn", "ni", 
 FEE_SKIP = ("cu",)  # 手续费贵、不重的扣完费几乎白干的品种：判 ✅▲ 但不重时浮层贴灰框「不重」（10-31，cu 一组开平约 3.3 档）
 RELAX = ("ag", "al", "zn", "pb", "br", "rb", "hc", "ao")  # 第 1 步只有「竞价量分 −1、盘口分 0」时不判 ❌，交给第 2 步（10-31 有色和 br rb hc ao 两年回放；cu、sp、ss、ru 不放，见文件开头）
 TAG_STYLE = {"腿2秒进": "快", "量少": "少", "不重": "灰"}  # 浮层按样式上色：「重…」紫底、快 红框、少 黄框、不重 灰框
+LEG2_ALWAYS = True  # 11-06 他定的：「腿2秒进」不管针真假、重不重都贴（以前只跟着「重…」贴）；False = 回到老样子
 # ---- 薄大（2026-10-30，分析/2026-10-26/腿2控价/小结.md 第 12、14 节）----
 BOOK_SHOW = ("sc",)  # 只有 sc 判薄大（nr、fu、bu、lu 回放里薄大不亏）
 THIN_STEP = 5  # 要吃那边第二档离第一档 ≥ 5 档 = 控价大（他定的）
@@ -666,15 +668,25 @@ def grouped(d: dict) -> dict:
 
 
 def tags_of(r: dict) -> list:
-    """浮层上的重仓标记 [[字, 样式], …]，贴在符号后面；只有 HEAVY_SHOW 的品种（同品种跨月）贴，别的返回空。"""
-    if r.get("品种") in BOOK_SHOW and r.get("薄大") == "薄大":  # 薄大顶替重仓那一串（sc 两年回放：重 + 薄大 也是亏的）
-        return [["薄大", "薄"]]
-    if r.get("品种") in FEE_SKIP and r.get("不重") == "不重":
-        return [["不重", "灰"]]
+    """浮层上的重仓标记 [[字, 样式], …]，贴在符号后面；只有 HEAVY_SHOW 的品种（同品种跨月）贴「重…」那一串。
+    「腿2秒进」11-06 他定的：只要主力动得少，不管针判真假、重不重、哪个品种都贴（LEG2_ALWAYS）。"""
     t = r.get("重仓标记")
-    if r.get("品种") not in HEAVY_SHOW or not isinstance(t, str) or not t:
-        return []
-    return [[w, "重" if w.startswith("重") else TAG_STYLE.get(w, "少")] for w in t.split()]
+    if r.get("品种") in BOOK_SHOW and r.get("薄大") == "薄大":  # 薄大顶替重仓那一串（sc 两年回放：重 + 薄大 也是亏的）
+        out = [["薄大", "薄"]]
+    elif r.get("品种") in FEE_SKIP and r.get("不重") == "不重":
+        out = [["不重", "灰"]]
+    elif r.get("品种") in HEAVY_SHOW and isinstance(t, str) and t:
+        out = [[w, "重" if w.startswith("重") else TAG_STYLE.get(w, "少")] for w in t.split()]
+    else:
+        out = []
+    if LEG2_ALWAYS and leg2_slow(r) and "腿2秒进" not in [w for w, _ in out]:
+        out.append(["腿2秒进", TAG_STYLE["腿2秒进"]])
+    return out
+
+
+def leg2_slow(r: dict) -> bool:
+    """有针（判了 ✅ ▲ ❌）且主力（腿2）竞价跳空比腿1 小。"""
+    return r.get("档") in ("真", "半真", "假") and r.get("主力动得少") == True  # noqa: E712（csv 读回来是 numpy 布尔，NaN 也要当否）
 
 
 def counts(rows: list) -> str:
@@ -736,8 +748,9 @@ def build_page(rows: list, o: datetime, info: dict) -> str:
                     rv.fmt(r.get("立刻能成交几倍门槛"), 1), rv.fmt(r.get("合计"), 0, plus=True),
                     f"{rv.fmt(r['腿1跳空档'], 1, plus=True)} / {rv.fmt(r['腿2跳空档'], 1, plus=True)}" if r.get("腿1跳空档") is not None else "",
                     ("薄大" + (f"（顶替 {r['重仓标记']}）" if r.get("重仓标记") else "")) if r.get("薄大") == "薄大" else
-                    (r["重仓标记"] + ("" if tags_of(r) else "（浮层不贴，只记录）")) if r.get("重仓标记") else
-                    "不重（手续费贵，浮层贴灰框）" if r.get("不重") == "不重" else "",
+                    (r["重仓标记"] + ("" if r.get("品种") in HEAVY_SHOW else "（浮层不贴，只记录）")) if r.get("重仓标记") else
+                    "不重（手续费贵，浮层贴灰框）" + ("、腿2秒进" if LEG2_ALWAYS and leg2_slow(r) else "") if r.get("不重") == "不重" else
+                    "腿2秒进（主力动得少）" if LEG2_ALWAYS and leg2_slow(r) else "",
                     ov.get(r["组合"], ""), rv.Raw(f"<span class='why'>{rv.esc(r.get('理由', ''))}</span>")])
     body.append(rv.table(["", "组合", "首笔区间", "猜首笔", "近（浮层「近」）", "首笔半（浮层「远」）", "远档", "两层手数", "昨收价差", "针", "针偏几档", "冷门腿竞价占持仓‰", "竞价后持仓变化",
                           "立刻能卖", "立刻能买", "托住针", "立刻能成交几倍门槛", "合计", "跳空档 腿1 / 主力", "重仓标记", "外盘", "理由"], tab))
