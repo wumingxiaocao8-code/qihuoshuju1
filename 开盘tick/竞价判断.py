@@ -165,7 +165,7 @@ CSV_COLS = ["开盘", "组合", "腿1", "腿2", "品种", "档", "符号", "首�
             "立刻能卖", "立刻能买", "托住几成", "盘口分", "合计", "保留比例下", "保留比例上", "保留比例依据", "腿1盘口宽档",
             "腿1竞价手数", "腿1卖一量", "腿1买一量", "腿2竞价手数", "腿2卖一量", "腿2买一量", "一档", "文字", "快照时间", "算好时间", "来源",
             "v1档", "猜首笔", "区间依据", "立刻能成交几倍门槛", "腿1跳空档", "腿2跳空档", "主力动得少", "重仓标记", "近", "首笔半",
-            "腿2台阶2", "腿2要吃五档", "腿2五档均", "腿2平时", "腿2厚薄倍", "腿2平时依据", "薄大", "不重", "远档", "两层手数", "小针", "持仓比", "量比", "换月条件", "换月"]
+            "腿2台阶2", "腿2要吃五档", "腿2五档均", "腿2平时", "腿2厚薄倍", "腿2平时依据", "薄大", "不重", "远档", "两层手数", "小针", "持仓比", "量比", "换月条件", "换月", "换月缺数"]
 
 
 # ---------- 判断（实盘、回放、开盘复盘共用） ----------
@@ -454,9 +454,12 @@ def evaluate(o: datetime, pairs: list, snaps: dict, closes: dict, ticks: dict, p
             try:
                 rc = roll_conds(p1, c1, c2, o, snaps.get(s1), snaps.get(s2))
             except Exception as e:  # 换月只是加个标记，出错也不能耽误判断
-                rc = {"条件": [], "说明": [], "持仓比": None, "量比": None}
-                j["理由"] = j.get("理由", "") + f"；换月没算成（{type(e).__name__}）"
+                rc = {"条件": [], "说明": [], "持仓比": None, "量比": None, "缺数": f"换月没算成（{type(e).__name__}）"}
             j |= {k: rc[k] for k in ("持仓比", "量比") if rc.get(k) is not None}
+            if rc.get("缺数"):
+                j["换月缺数"] = rc["缺数"]
+                if j.get("档") in ("真", "半真"):
+                    j["理由"] = j.get("理由", "") + f"；{rc['缺数']}"
             if rc["条件"]:
                 j["换月条件"] = "+".join(rc["条件"])
             label = roll_label(rc["条件"]) if (ROLL_ALL or "A" in rc["条件"]) else None
@@ -746,12 +749,16 @@ def oi_ratio(a: dict | None, b: dict | None) -> float | None:
 
 
 def roll_conds(p: str, c1: str, c2: str, o, a: dict | None, b: dict | None) -> dict:
-    """换月三条（见 ROLL_ALL）：{"条件": ["A", "B", "C" 里满足的], "说明": [...], "持仓比", "量比"}；缺数的那条当不满足。"""
+    """换月三条（见 ROLL_ALL）：{"条件": ["A", "B", "C" 里满足的], "说明": [...], "持仓比", "量比", "缺数"}；缺数的那条当不满足。
+    成交量只用这次开盘该用的那天（主力表.ref_day）；那天没下到就不用更早的冒充，B、C 记成未知、写进「缺数」（11-07 审查）。
+    读的是两条腿自己的量（主力表._raw，交割月还在交易的 cu2611 也有），不是挑主力那张去掉交割月的表。"""
     import 主力表 as zl
-    out = {"条件": [], "说明": [], "持仓比": None, "量比": None}
+    out = {"条件": [], "说明": [], "持仓比": None, "量比": None, "缺数": ""}
     m1, m2 = c1[-4:], c2[-4:]
-    ds = zl.prev_day(o)
-    day = zl._day(ds).get(p, {}) if ds else {}
+    ds, why = zl.ref_day(o)
+    if not ds:
+        out["缺数"] = f"换月 B、C 未知：{why}"
+    day = zl._raw(ds).get(p, {}) if ds else {}
     v1, o1 = day.get(m1, (None, None))
     v2, o2 = day.get(m2, (None, None))
     ratio = oi_ratio(a, b)
@@ -768,11 +775,14 @@ def roll_conds(p: str, c1: str, c2: str, o, a: dict | None, b: dict | None) -> d
             out["条件"].append("B")
             out["说明"].append(f"{ds} 成交量 {c1} 是 {c2} 的 {v1 / v2:.0%}")
         days = zl._days()
+        if ds not in days:  # 刚在后台下好的
+            zl._days.cache_clear()
+            days = zl._days()
         i = days.index(ds)
         past = days[max(0, i - ROLL_DAYS):i]
 
         def avg(m):
-            v = [zl._day(d).get(p, {}).get(m, (None,))[0] for d in past]
+            v = [zl._raw(d).get(p, {}).get(m, (None,))[0] for d in past]
             v = [x for x in v if x is not None]
             return sum(v) / len(v) if len(v) >= 3 else None
         a1, a2 = avg(m1), avg(m2)
@@ -1209,8 +1219,11 @@ def run_live(force: bool, overlay: bool) -> None:
 
         def _fetch():
             try:
-                got = zl.ensure(o)
-                print(f"换月用的每日行情：新下了 {', '.join(got)}" if got else "换月用的每日行情：已经是最新的", flush=True)
+                res = zl.ensure(o)
+                ds, why = zl.ref_day(o)
+                tried = "；".join(f"{d} {st}" for d, st in res.items())
+                print(f"换月用的每日行情：用 {ds}" if ds else f"换月用的每日行情缺：{why}（换月 B、C 会记成未知）",
+                      (f"（这次试了：{tried}）" if tried else "（本来就齐）"), flush=True)
             except Exception as e:
                 print(f"换月用的每日行情没下成（不影响判断，只是换月少看成交量那两条）：{type(e).__name__} {e}", flush=True)
         threading.Thread(target=_fetch, daemon=True).start()
