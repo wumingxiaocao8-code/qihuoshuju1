@@ -4,6 +4,7 @@
   - fu 小针 → 同事版不用
   - 说明.md 开头加一段写清楚这两处不一样
 用法：python 同事版改动.py <仓库里的 开盘tick 文件夹>"""
+import os
 import re
 import sys
 from pathlib import Path
@@ -20,20 +21,17 @@ NOTE = ("> **同事版和作者版不一样的地方**（发布时自动改的�
         "没有燃料油「小针」。下面正文如果写到这两条，以这里为准。")
 
 
-def rw(p: Path, fn) -> None:
+def read(p: Path) -> str:
     with open(p, encoding="utf-8", newline="") as f:
-        s = f.read()
-    with open(p, "w", encoding="utf-8", newline="") as f:
-        f.write(fn(s))
+        return f.read()
 
 
-for name, pat, new in RULES:
-    def sub(s, pat=pat, new=new, name=name):
-        s2, n = re.subn(pat, lambda m: new, s, count=1, flags=re.M)
-        if n != 1:
-            sys.exit(f"✘ {name} 里找不到要改的那一行（{pat}），先看看作者版是不是改了写法")
-        return s2
-    rw(T / name, sub)
+def write_atomic(p: Path, s: str) -> None:
+    """先写同目录临时文件再替换，写到一半出错也不会留下空文件（11-07 审查）。"""
+    tmp = p.with_name(p.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        f.write(s)
+    os.replace(tmp, p)
 
 
 def add_note(s: str) -> str:
@@ -44,5 +42,17 @@ def add_note(s: str) -> str:
     return first + nl + nl + NOTE + nl + rest
 
 
-rw(T / "说明.md", add_note)
+# 先把所有文件都改好放在内存里，全部找得到要改的行才一起写回；有一处找不到就一个都不动
+out: dict[Path, str] = {}
+for name, pat, new in RULES:
+    p = T / name
+    s = out.get(p) or read(p)
+    s2, n = re.subn(pat, lambda m: new, s, count=1, flags=re.M)
+    if n != 1:
+        sys.exit(f"✘ {name} 里找不到要改的那一行（{pat}），先看看作者版是不是改了写法；文件都没动")
+    out[p] = s2
+p = T / "说明.md"
+out[p] = add_note(out.get(p) or read(p))
+for p, s in out.items():
+    write_atomic(p, s)
 print("✔ 同事版改动：腿2 不直接关、没有 fu 小针、说明.md 加了说明")
