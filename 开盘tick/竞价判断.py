@@ -139,7 +139,8 @@ ROLL_ALL = True
 ROLL_VOL, ROLL_SHRINK, ROLL_DAYS = 0.75, 0.2, 5
 # 小针（11-06 他定的，测试/2026-11-06_fu专项/小结.md）：针没出门槛，但竞价后立刻能成交那边顺着针偏 ≥ 这么多档 → 判 ▲、贴「小针」，色块「小」。
 # fu 两年回放（正滑一半、挂首笔半）：早 5 年每次 +1.9 档、近两年 +4.1 档（9 个季度全赚），约一周一次；偏 ≤ 4 档的怎么算都亏
-SMALL = {}  # 同事版：不用燃料油小针（作者版 fu 12 档）；发布时由 维护/同事版改动.py 改
+# 11-08 昨收换成收盘前 30 秒均价后 fu 改 10 档（测试/2026-11-08_fu新规则/小结.md：12 档是按最后一笔挑的，换昨收后掉了约两成，10 档补回来、前后两段都赚）
+SMALL = {}  # 同事版：不用燃料油小针（11-08 起作者版也关了）；发布时由 维护/同事版改动.py 改
 LEG2_ALWAYS = True  # 11-06 他定的：「腿2秒进」不管针真假、重不重都贴（以前只跟着「重…」贴）；False = 回到老样子
 # 腿2秒进！（11-07 他定的，测试/2026-11-07_腿2秒进档位/小结.md）：腿2秒进且主力（腿2）竞价自己跳了 ≥ 这么多倍门槛 → 浮层写「腿2秒进！」（短名「腿2！」）。
 # 只改字，色块、手数照旧。两年回放这类针腿2 晚半秒平均少 8.2 档，别的腿2秒进只少 0.6 档；None = 不分
@@ -158,6 +159,7 @@ EARLIEST, LATEST = timedelta(minutes=10), timedelta(seconds=90)  # 开盘前 10 
 AUCTION = timedelta(seconds=60)  # 竞价那张快照在开盘前一分钟里（20:59:00.5）
 GIVE_UP = timedelta(seconds=20)  # HH:59:40 还没收到竞价快照，就当这次没开盘
 SETTLE = 3  # 第一张竞价快照到了以后，最多再等 3 秒等其余的
+CLOSE_AVG = 30  # 昨收 = 上一节收盘前 30 秒成交均价（11-08 起，测试/2026-11-08_昨收算法/小结.md；5 秒效果只有约三分之一）；0 = 回到最后一笔
 NTP = ("ntp.aliyun.com", "ntp.tencent.com", "cn.pool.ntp.org")  # 问标准时间（10-23 晚发现这台电脑的时钟慢了 14.7 秒）
 CLOCK_WARN = 3  # 电脑时钟差 3 秒以上，提示里说一声
 CSV_COLS = ["开盘", "组合", "腿1", "腿2", "品种", "档", "符号", "首笔下沿", "首笔上沿", "理由", "昨收价差", "腿1竞价", "腿2竞价",
@@ -165,7 +167,7 @@ CSV_COLS = ["开盘", "组合", "腿1", "腿2", "品种", "档", "符号", "首�
             "立刻能卖", "立刻能买", "托住几成", "盘口分", "合计", "保留比例下", "保留比例上", "保留比例依据", "腿1盘口宽档",
             "腿1竞价手数", "腿1卖一量", "腿1买一量", "腿2竞价手数", "腿2卖一量", "腿2买一量", "一档", "文字", "快照时间", "算好时间", "来源",
             "v1档", "猜首笔", "区间依据", "立刻能成交几倍门槛", "腿1跳空档", "腿2跳空档", "主力动得少", "重仓标记", "近", "首笔半",
-            "腿2台阶2", "腿2要吃五档", "腿2五档均", "腿2平时", "腿2厚薄倍", "腿2平时依据", "薄大", "不重", "远档", "两层手数", "小针", "持仓比", "量比", "换月条件", "换月", "换月缺数"]
+            "腿2台阶2", "腿2要吃五档", "腿2五档均", "腿2平时", "腿2厚薄倍", "腿2平时依据", "薄大", "不重", "远档", "两层手数", "小针", "持仓比", "量比", "换月条件", "换月", "换月缺数", "昨收来源"]
 
 
 # ---------- 判断（实盘、回放、开盘复盘共用） ----------
@@ -664,9 +666,43 @@ def snap_from_quote(q, before: dict, o: datetime, carry: bool = False) -> dict:
                for w, a in (("买", "bid"), ("卖", "ask")) for x, y in (("价", "price"), ("量", "volume"))}}
 
 
+def close_avg(api, s: str, o: datetime, n: int = None):
+    """昨收（11-08 起）：上一节收盘前最后 n 秒（CLOSE_AVG）的成交量加权均价 = 成交额增量 ÷ (成交手数 × 合约乘数)，
+    和 测试/2026-11-08_昨收算法/a_收盘价.py 的 B30 同一个算法（窗口 = (收盘时刻 − n 秒, 收盘时刻]）。
+    这段没成交、取不到 tick、找不到收盘那节，返回 None，交给 close_of 用最后一笔。"""
+    n = n or CLOSE_AVG
+    df = api.get_tick_serial(s, data_length=400)
+    df = df[df["datetime"] > 0].dropna(subset=["datetime", "volume", "amount"])
+    if not len(df):
+        return None
+    t = pd.to_datetime(df["datetime"].astype("int64"), utc=True).dt.tz_convert("Asia/Shanghai").dt.tz_localize(None).to_numpy()
+    df = df.assign(t=t)
+    df = df[df["t"] < pd.Timestamp(o - AUCTION)]  # 竞价那张和之后的不要
+    ends = df["t"].dt.ceil("min")
+    hit = ends.dt.strftime("%H:%M").isin(tick.SESSION_ENDS) & (df["t"] > ends - pd.Timedelta(minutes=2))
+    if not hit.any():
+        return None
+    e = ends[hit].max()  # 上一节收盘时刻（15:00 / 23:00 / 01:00 / 02:30）
+    dv, da, gap = df["volume"].diff(), df["amount"].diff(), df["t"].diff()
+    w = (df["t"] > e - pd.Timedelta(seconds=n)) & (df["t"] <= e) & (dv > 0) & (da > 0) & (gap <= pd.Timedelta(minutes=10))
+    v = dv[w].sum()
+    mult = num(api.get_quote(s).volume_multiple)
+    if not v or not mult:
+        return None
+    return round(float(da[w].sum() / (v * mult)), 6)
+
+
 def close_of(api, s: str, before: dict, o: datetime):
-    """昨收：竞价前最后一张快照的最新价（就是上一节收盘价，跟开盘复盘用的 1 分钟线收盘一样）。
+    """昨收：先用收盘前 30 秒成交均价（close_avg，11-08 起，两年回放比最后一笔好：真针判 ❌ 少约一成、盈亏 18 个品种 15 个变好，
+    见 测试/2026-11-08_昨收算法/小结.md）；那段没成交 / 取不到，退回竞价前最后一张快照的最新价（上一节收盘价）。
     万一那张快照是开盘前几分钟才推的（不是收盘那张），改用 1 分钟线。"""
+    if CLOSE_AVG:
+        try:
+            c = close_avg(api, s, o)
+            if c is not None:
+                return c, f"{CLOSE_AVG}秒均价"
+        except Exception as e:
+            print(f"{s} 收盘均价没算出来：{type(e).__name__} {e}")
     bt = before.get("时间")
     if before.get("最新价") is not None and bt is not None and bt < o - timedelta(minutes=6):
         return before["最新价"], "收盘快照"
@@ -1169,13 +1205,15 @@ def live(o: datetime, pairs: list, jf: Path, state: dict, page: Path, skew: floa
         snaps = {s: snap_from_quote(quotes[s], before[s], o, carry) for s in got if s in before}
         ticks = {s: num(q.price_tick) for s, q in quotes.items()}
         rows = evaluate(o, pairs, snaps, closes, ticks, past, "实盘", missing)
+        for r in rows:
+            r["昨收来源"] = "/".join(src.get(r.get(n), "") for n in ("腿1", "腿2"))
         log["算好"] = clock()
         for r in rows:
             r["算好时间"] = f"{log['算好']:%H:%M:%S.%f}"[:-3]
         put(jf, result_json(rows, state, f"竞价判断 {log['算好']:%H:%M:%S}（{o + timedelta(seconds=SHOW):%H:%M} 消失）"
                             + (f"；{note}" if note else ""), page))
         log["交给浮层"] = clock()
-        other = sorted({v for v in src.values()} - {"收盘快照"})
+        other = sorted({v for v in src.values()} - {f"{CLOSE_AVG}秒均价" if CLOSE_AVG else "收盘快照"})
         if other:
             log["昨收"] = f"有的合约昨收用的{'、'.join(other)}"
         return rows, log
