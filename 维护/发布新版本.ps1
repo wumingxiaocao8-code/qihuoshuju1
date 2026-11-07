@@ -16,6 +16,10 @@ foreach ($f in $files) { Copy-Item (Join-Path $From $f) (Join-Path $To $f) -Forc
 Copy-Item (Join-Path $From "看板.txt") (Join-Path $To "看板.示例.txt") -Force
 Get-ChildItem (Join-Path $From "复盘数据") -File | Where-Object { $_.Name -like "两年回放_*.csv" -or $_.Name -eq "腿2盘口_sc.csv" } |
     ForEach-Object { Copy-Item $_.FullName (Join-Path $To "复盘数据\$($_.Name)") -Force }
+# 作者版有、同事版不要的规则（有腿2 直接关、fu 小针）在这里改回来（11-07 加，见 维护\同事版改动.py）
+$py = Join-Path $HOME "AppData\Roaming\uv\python\cpython-3.13.16-windows-x86_64-none\python.exe"
+& $py (Join-Path $Repo "维护\同事版改动.py") $To
+if ($LASTEXITCODE -ne 0) { Write-Host "✘ 同事版改动没做成，没发布" -ForegroundColor Red; exit 1 }
 
 Push-Location $Repo
 git add -A
