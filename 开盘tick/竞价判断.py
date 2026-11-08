@@ -159,6 +159,7 @@ EARLIEST, LATEST = timedelta(minutes=10), timedelta(seconds=90)  # 开盘前 10 
 AUCTION = timedelta(seconds=60)  # 竞价那张快照在开盘前一分钟里（20:59:00.5）
 GIVE_UP = timedelta(seconds=20)  # HH:59:40 还没收到竞价快照，就当这次没开盘
 SETTLE = 3  # 第一张竞价快照到了以后，最多再等 3 秒等其余的
+CLOSE_BY = timedelta(seconds=20)  # 取 30 秒均价要的 tick 最晚等到竞价前 20 秒（HH:58:40），没到的合约昨收退回收盘快照（11-08 审查）
 CLOSE_AVG = 30  # 昨收 = 上一节收盘前 30 秒成交均价（11-08 起，测试/2026-11-08_昨收算法/小结.md；5 秒效果只有约三分之一）；0 = 回到最后一笔
 NTP = ("ntp.aliyun.com", "ntp.tencent.com", "cn.pool.ntp.org")  # 问标准时间（10-23 晚发现这台电脑的时钟慢了 14.7 秒）
 CLOCK_WARN = 3  # 电脑时钟差 3 秒以上，提示里说一声
@@ -300,7 +301,8 @@ def judge(a: dict | None, b: dict | None, close1, close2, t: float, gate, names=
         out["档"] = v1
         why.append(f"合计 {vol + book:+d}{locked}；{v1_why} → {SAY[v1]}" + ("（盘口缺一边，按 v1）" if mix is not None else ""))
     if heavy and out["档"] in ("真", "半真"):  # 大机会：重仓标记（浮层上贴不贴看 HEAVY_SHOW）
-        out["重仓标记"] = " ".join([f"重{times:.1f}"] + ["腿2秒进"] * out["主力动得少"] + ["量少"] * few)
+        # 倍数往下截一位（不四舍五入）：浮层拿这个字判「重」（≥ 3 倍），2.96 不能写成 3.0（11-08 审查）
+        out["重仓标记"] = " ".join([f"重{math.floor(times * 10 + 1e-9) / 10:.1f}"] + ["腿2秒进"] * out["主力动得少"] + ["量少"] * few)
         why.append(f"重仓标记「{out['重仓标记']}」：立刻能成交那边偏出门槛 {times:.1f} 倍"
                    + (f"；主力竞价跳了 {g2:+.0f} 档、腿1 {g1:+.0f} 档，主力动得少，腿2 要秒进" if out["主力动得少"] else "")
                    + (f"；冷门腿竞价只占持仓 {out['冷门腿竞价占持仓‰']:.2f}‰，能成交的手数少" if few else ""))
@@ -666,12 +668,39 @@ def snap_from_quote(q, before: dict, o: datetime, carry: bool = False) -> dict:
                for w, a in (("买", "bid"), ("卖", "ask")) for x, y in (("价", "price"), ("量", "volume"))}}
 
 
-def close_avg(api, s: str, o: datetime, n: int = None):
+def prefetch_ticks(api, symbols, until: datetime, clock) -> dict:
+    """一次订阅所有合约的 tick 序列（算 30 秒均价用），最多等到 until（按 clock 的标准时间）。返回 {合约: tick 序列}，到点没收全的不在里面。
+    11-08 审查：原来逐个同步 get_tick_serial，一个合约卡住最多等 158 秒，会拖过竞价、整场判断作废。
+    在 task 里调用 get_tick_serial 不阻塞，只发订阅，数据到没到用 is_serial_ready 看。"""
+    dfs = {}
+
+    async def sub():
+        for s in symbols:
+            try:
+                dfs[s] = api.get_tick_serial(s, data_length=400)
+            except Exception as e:
+                print(f"{s} 订阅 tick 序列失败：{type(e).__name__} {e}")
+
+    task = api.create_task(sub())
+    while True:
+        left = (until - clock()).total_seconds()
+        if left <= 0 or (task.done() and all(api.is_serial_ready(d) for d in dfs.values())):
+            break
+        api.wait_update(deadline=time.time() + min(0.5, left))
+    ready = {s: d for s, d in dfs.items() if api.is_serial_ready(d)}
+    late = [s for s in symbols if s not in ready]
+    if late:
+        print(f"到 {until:%H:%M:%S} 还没收全 tick 序列：{'、'.join(late)}，这些合约昨收退回收盘快照")
+    return ready
+
+
+def close_avg(api, s: str, o: datetime, n: int = None, df: pd.DataFrame = None):
     """昨收（11-08 起）：上一节收盘前最后 n 秒（CLOSE_AVG）的成交量加权均价 = 成交额增量 ÷ (成交手数 × 合约乘数)，
     和 测试/2026-11-08_昨收算法/a_收盘价.py 的 B30 同一个算法（窗口 = (收盘时刻 − n 秒, 收盘时刻]）。
     这段没成交、取不到 tick、找不到收盘那节，返回 None，交给 close_of 用最后一笔。"""
     n = n or CLOSE_AVG
-    df = api.get_tick_serial(s, data_length=400)
+    if df is None:
+        return None
     df = df[df["datetime"] > 0].dropna(subset=["datetime", "volume", "amount"])
     if not len(df):
         return None
@@ -692,13 +721,14 @@ def close_avg(api, s: str, o: datetime, n: int = None):
     return round(float(da[w].sum() / (v * mult)), 6)
 
 
-def close_of(api, s: str, before: dict, o: datetime):
+def close_of(api, s: str, before: dict, o: datetime, df: pd.DataFrame = None, late: bool = False):
     """昨收：先用收盘前 30 秒成交均价（close_avg，11-08 起，两年回放比最后一笔好：真针判 ❌ 少约一成、盈亏 18 个品种 15 个变好，
     见 测试/2026-11-08_昨收算法/小结.md）；那段没成交 / 取不到，退回竞价前最后一张快照的最新价（上一节收盘价）。
-    万一那张快照是开盘前几分钟才推的（不是收盘那张），改用 1 分钟线。"""
+    万一那张快照是开盘前几分钟才推的（不是收盘那张），改用 1 分钟线（late = 已过 CLOSE_BY 就不再联网取，免得拖过竞价）。
+    df = prefetch_ticks 取好的 tick 序列，没有就不算均价。"""
     if CLOSE_AVG:
         try:
-            c = close_avg(api, s, o)
+            c = close_avg(api, s, o, df=df)
             if c is not None:
                 return c, f"{CLOSE_AVG}秒均价"
         except Exception as e:
@@ -706,6 +736,8 @@ def close_of(api, s: str, before: dict, o: datetime):
     bt = before.get("时间")
     if before.get("最新价") is not None and bt is not None and bt < o - timedelta(minutes=6):
         return before["最新价"], "收盘快照"
+    if late:
+        return before.get("最新价"), "快照"
     try:
         c = tick.close_before(tick.minute_klines(api, s, 30), o)
         if c:
@@ -1025,7 +1057,7 @@ def review_cols(j: dict, first, prod=None) -> dict:
            "判断来源": j.get("来源", ""), "首笔下沿": lo, "首笔上沿": hi,
            "v1判断": v1 if isinstance(v1, str) and v1 else j.get("档", ""),
            "立刻能卖": num(j.get("立刻能卖")), "立刻能买": num(j.get("立刻能买")),
-           "猜首笔": guess, "首笔半": half, "远档": far,
+           "猜首笔": guess, "首笔半": half, "远档": far, "判断昨收价差": base,
            "实盘首笔半": num(j.get("首笔半")) if j.get("来源") == "实盘" else None,
            "实盘远档": num(j.get("远档")) if j.get("来源") == "实盘" else None}
     if lo is not None and hi is not None:
@@ -1164,8 +1196,10 @@ def live(o: datetime, pairs: list, jf: Path, state: dict, page: Path, skew: floa
         log["记下竞价前"] = clock()
         # 昨收、过去的开盘复盘在竞价前就准备好：有的合约昨收要联网取 1 分钟线（10-23 晚放在竞价后取，出结果晚了约 0.9 秒）
         closes, src = {}, {}
+        until = max(o - AUCTION - CLOSE_BY, clock() + timedelta(seconds=3))
+        dfs = prefetch_ticks(api, list(before), until, clock) if CLOSE_AVG else {}
         for s in before:
-            closes[s], src[s] = close_of(api, s, before[s], o)
+            closes[s], src[s] = close_of(api, s, before[s], o, dfs.get(s), clock() >= until)
         past = rv.read_csv(rv.REC_FILE)
         keys = {rv.product_of(a) if rv.product_of(a) == rv.product_of(b) else f"{rv.product_of(a)}-{rv.product_of(b)}" for a, b in pairs}
         for p in sorted(keys & set(FIT)):  # sc 首笔区间的系数也先算好（要 import scipy，约 1 秒；跨品种按 nr-ru 这样的名字）
@@ -1205,8 +1239,9 @@ def live(o: datetime, pairs: list, jf: Path, state: dict, page: Path, skew: floa
         snaps = {s: snap_from_quote(quotes[s], before[s], o, carry) for s in got if s in before}
         ticks = {s: num(q.price_tick) for s, q in quotes.items()}
         rows = evaluate(o, pairs, snaps, closes, ticks, past, "实盘", missing)
+        short = {s.split(".")[-1]: v for s, v in src.items()}  # 结果行里的腿是 ag2612，src 的键是 SHFE.ag2612（11-08 审查：原来永远对不上）
         for r in rows:
-            r["昨收来源"] = "/".join(src.get(r.get(n), "") for n in ("腿1", "腿2"))
+            r["昨收来源"] = "/".join(short.get(r.get(n), "") for n in ("腿1", "腿2"))
         log["算好"] = clock()
         for r in rows:
             r["算好时间"] = f"{log['算好']:%H:%M:%S.%f}"[:-3]
