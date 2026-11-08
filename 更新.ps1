@@ -39,10 +39,17 @@ $py = $null
 $probe = "import sys; print(sys.executable if sys.version_info[:2]==(3,13) else '')"
 try { $exe = & py -3.13 -c $probe 2>$null; if ($LASTEXITCODE -eq 0 -and $exe) { $py = "$exe".Trim() } } catch {}
 if (-not $py) { try { $exe = & python -c $probe 2>$null; if ($LASTEXITCODE -eq 0 -and $exe) { $py = "$exe".Trim() } } catch {} }
-if ($py) {
-    & $py -m pip install --disable-pip-version-check -q -r (Join-Path $Here "requirements.txt")
-    if ($LASTEXITCODE -ne 0) { & $py -m pip install --disable-pip-version-check -q -r (Join-Path $Here "requirements.txt") -i https://pypi.tuna.tsinghua.edu.cn/simple }
+# 11-08 审查：两次都装失败、找不到 Python 3.13 时原来照样说更新完了，新程序配旧包要到开盘才发现跑不起来；现在明确报错，最后再试一遍包能不能 import
+if (-not $py) { Write-Host "✘ 程序文件已更新，但找不到 Python 3.13，没法检查和补装要用的包。把这段话给 AI 看" -ForegroundColor Red; exit 1 }
+& $py -m pip install --disable-pip-version-check -q -r (Join-Path $Here "requirements.txt")
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "官方源装不上，换清华镜像再试……"
+    & $py -m pip install --disable-pip-version-check -q -r (Join-Path $Here "requirements.txt") -i https://pypi.tuna.tsinghua.edu.cn/simple
+    if ($LASTEXITCODE -ne 0) { Write-Host "✘ 程序文件已更新，但要用的包两次都没装上（官方源和清华镜像），今晚的竞价判断可能跑不起来。把上面的报错给 AI 看" -ForegroundColor Red; exit 1 }
 }
+& $py -c "import tqsdk, pandas, numpy, scipy, PIL, openpyxl"  # 不重定向 stderr：5.1 里 2>$null 加 Stop 会把报错变成异常直接中断
+if ($LASTEXITCODE -ne 0) { Write-Host "✘ 包装完了但 import 不进来（tqsdk / pandas / numpy / scipy / pillow / openpyxl 里有坏的）。把这段话给 AI 看" -ForegroundColor Red; exit 1 }
+Write-Host "✔ 要用的包都在"
 
 # 念一下最新的更新记录
 Write-Host "`n—— 最新的更新记录 ——"
