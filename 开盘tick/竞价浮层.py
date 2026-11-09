@@ -220,7 +220,10 @@ def read_board(f: Path = BOARD_FILE) -> dict:
                     if len(n) >= 2:
                         lots[k[2:].strip().lower()] = n
                     continue
-                opts[k] = float(v)
+                try:
+                    opts[k] = float(v)
+                except ValueError:  # 「只认路径 = 东证」这种文字设置，原样存着
+                    opts[k] = v
             else:
                 rows.append(line.split())
     board = {"格子": rows, "参数": opts, "手数": lots}
@@ -555,7 +558,7 @@ def close_button(side: int):
 
 def scaled(board: dict, scale: float) -> dict:
     """位置参数乘倍数（博易云的像素 → 屏幕像素，或 → 缩小的截图）。"""
-    p = {k: v * scale for k, v in board["参数"].items() if k != "倍数"}
+    p = {k: v * scale if isinstance(v, float | int) and k != "对不上容差" else v for k, v in board["参数"].items() if k != "倍数"}  # 文字设置和比例不乘
     out = {"格子": board["格子"], "参数": p | {"倍数": board["参数"].get("倍数", 1) * scale}, "手数": board.get("手数", LOTS)}
     if board.get("行线"):
         out["行线"] = [y * scale for y in board["行线"]]
@@ -693,8 +696,9 @@ def client_rect(h) -> tuple | None:
     return p.x, p.y, p.x + r.right, p.y + r.bottom
 
 
-def find_pobo() -> tuple | None:
-    """博易云的主窗口：pobo.exe 里可见、没最小化、最大的那个。返回 (hwnd, 窗口里面的屏幕坐标)；没开或最小化了返回 None。"""
+def find_pobo(only: str = "") -> tuple | None:
+    """博易云的主窗口：pobo.exe 里可见、没最小化、最大的那个。返回 (hwnd, 窗口里面的屏幕坐标)；没开或最小化了返回 None。
+    only = 看板.txt 的「只认路径」：装了几家期货公司的博易云时，只认 pobo.exe 完整路径里含这几个字的。"""
     found, names = [], {}
 
     @WNDENUMPROC
@@ -704,8 +708,8 @@ def find_pobo() -> tuple | None:
         pid = wt.DWORD()
         user32.GetWindowThreadProcessId(h, ctypes.byref(pid))
         if pid.value not in names:
-            names[pid.value] = os.path.basename(exe_name(pid.value)).lower()
-        if names[pid.value] == "pobo.exe":
+            names[pid.value] = exe_name(pid.value).lower()
+        if os.path.basename(names[pid.value]) == "pobo.exe" and str(only).lower() in names[pid.value]:
             r = client_rect(h)
             if r and (r[2] - r[0]) * (r[3] - r[1]) > 400 * 300:
                 found.append((h, r))
@@ -797,8 +801,8 @@ def save_refs(shot, rect, board: dict, lines: list | None = None) -> int:
     return len(keys)
 
 
-def same(a, b) -> bool:
-    """两张标题条是不是同一个：只看字（亮的像素），底色变了（选中的格子标题会变色）也认得出。"""
+def same(a, b, tol: float = MISMATCH) -> bool:
+    """两张标题条是不是同一个：只看字（亮的像素），底色变了（选中的格子标题会变色）也认得出。tol = 允许多少比例的像素对不上。"""
     import numpy as np
     if abs(a.width - b.width) > 2 or abs(a.height - b.height) > 2:
         return False
@@ -806,7 +810,7 @@ def same(a, b) -> bool:
     h, w = min(x.shape[0], y.shape[0]) - 2, min(x.shape[1], y.shape[1]) - 2  # 大小差一两个像素（取整）就按小的那个比
     # 上下左右各容许错开 1 像素（行线有小数，取整后位置可能差 1 像素，细笔画的字一错开就对不上了）
     return min(float((x[1:1 + h, 1:1 + w] != y[1 + dy:1 + dy + h, 1 + dx:1 + dx + w]).mean())
-               for dy in (-1, 0, 1) for dx in (-1, 0, 1)) <= MISMATCH
+               for dy in (-1, 0, 1) for dx in (-1, 0, 1)) <= tol
 
 
 def check_layout(shot, rect, board: dict, vis: set | None = None) -> tuple[set | None, str]:
@@ -824,7 +828,7 @@ def check_layout(shot, rect, board: dict, vis: set | None = None) -> tuple[set |
             continue
         ref = REF_DIR / f"{cell_name(i, j)}.png"
         if (ref.exists() and meta.get("格子", {}).get(cell_name(i, j)) == pair_key(board["格子"][i][j])
-                and same(shot.crop(box), Image.open(ref))):
+                and same(shot.crop(box), Image.open(ref), board["参数"].get("对不上容差", MISMATCH))):
             ok.add((i, j))
         else:
             bad.append(cell_name(i, j))
@@ -941,7 +945,8 @@ def run(json_file: Path | None, test: bool = False, hold: float = 20, check: boo
     dpi_aware()
     stop_key()
     raw = read_board()
-    pobo = find_pobo()
+    only = raw["参数"].get("只认路径", "")
+    pobo = find_pobo(only)
     board = scaled(raw, dpi_ratio(pobo[0]) if pobo else 1.0)
     shot = None
     if test:
@@ -994,7 +999,7 @@ def run(json_file: Path | None, test: bool = False, hold: float = 20, check: boo
             return False
         if now >= st["next_find"]:  # 每秒：博易云挪没挪、哪些格子露在外面，浮层保持在最上面
             st["next_find"] = now + 1
-            st["pobo"] = find_pobo()
+            st["pobo"] = find_pobo(only)
             if st["pobo"]:
                 st["board"] = scaled(raw, dpi_ratio(st["pobo"][0]))
                 vis = visible_cells(st["pobo"][0], st["pobo"][1], st["board"])

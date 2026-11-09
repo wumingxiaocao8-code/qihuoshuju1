@@ -156,6 +156,7 @@ KINDS = tuple(SYMBOL)
 SHOW = 60  # 标签开盘后再留 60 秒
 EARLIEST, LATEST = timedelta(minutes=10), timedelta(seconds=90)  # 开盘前 10 分钟以内、HH:58:30 以前才跑
 AUCTION = timedelta(seconds=60)  # 竞价那张快照在开盘前一分钟里（20:59:00.5）
+SUBSCRIBE_STOP = timedelta(seconds=100)  # 离开盘 100 秒（HH:58:20）还没订阅上的合约不再逐个试，留时间重连、按时写结果（11-09）
 GIVE_UP = timedelta(seconds=20)  # HH:59:40 还没收到竞价快照，就当这次没开盘
 SETTLE = 3  # 第一张竞价快照到了以后，最多再等 3 秒等其余的
 CLOSE_BY = timedelta(seconds=20)  # 取 30 秒均价要的 tick 最晚等到竞价前 20 秒（HH:58:40），没到的合约昨收退回收盘快照（11-08 审查）
@@ -1141,13 +1142,40 @@ def connect_until(o: datetime, jf: Path, state: dict, clock):
     while True:
         n += 1
         try:
-            return tick.TqApi(auth=tick.load_auth(), disable_print=True)
+            return tick.TqApi(auth=tick.load_auth(), disable_print=False)  # 11-09：天勤自己的通知（连接建立 / 断开等）写进运行日志，出事有线索
         except Exception as e:
             print(f"第 {n} 次连天勤失败：{type(e).__name__} {e}")
             put(jf, state | {"状态": "等待", "红": True, "提示": f"竞价判断：连不上天勤，重试中（{clock():%H:%M:%S}）"})
             if clock() + timedelta(seconds=5) >= stop:
                 raise
             time.sleep(5)
+
+
+class NoQuotes(RuntimeError):
+    """连上了天勤，但重连一次后还是一个合约的行情都没来。"""
+
+
+def subscribe(api, symbols: list, stop: datetime, clock) -> tuple[dict, dict]:
+    """订阅行情，返回 (quotes, missing)：先一次全订；不行再逐个试（一个合约有毛病不拖累别的）。
+    11-09：逐个试原来没有总时限，天勤不回话时每个合约等 30 秒，几十个合约能卡过开盘、把任务计划占住，下一场被跳过。
+    现在过了 stop 就不试了；第一个就超时、一个都没成，说明是天勤没回话，再试别的也一样，直接回去让上面重连。"""
+    try:
+        return dict(zip(symbols, api.get_quote_list(symbols))), {}
+    except Exception as e:
+        print(f"一次订阅 {len(symbols)} 个合约没成：{type(e).__name__} {e}")
+    quotes, missing = {}, {}
+    for s in symbols:
+        if clock() >= stop:
+            missing[s] = "来不及订阅"
+            continue
+        try:
+            quotes[s] = api.get_quote(s)
+        except Exception as e:
+            missing[s] = "订阅不了"
+            print(f"{s} 订阅不了：{type(e).__name__} {e}")
+            if type(e).__name__ == "TqTimeoutError" and not quotes:
+                return quotes, missing | {x: "天勤没回话，没试" for x in symbols if x not in missing}
+    return quotes, missing
 
 
 def live(o: datetime, pairs: list, jf: Path, state: dict, page: Path, skew: float = 0.0) -> tuple[list, dict] | None:
@@ -1169,22 +1197,23 @@ def live(o: datetime, pairs: list, jf: Path, state: dict, page: Path, skew: floa
         prev = max((d for d in days if d < o.date()), default=None)
         carry = o.hour < 12 and prev is not None and pre.has_opening(datetime.combine(prev, datetime.min.time()).replace(hour=21), days)
         symbols = list(dict.fromkeys(s for pr in pairs for s in pr))
-        quotes, missing = {}, {}
-        try:
-            quotes = dict(zip(symbols, api.get_quote_list(symbols)))
-        except Exception:
-            for s in symbols:
-                try:
-                    quotes[s] = api.get_quote(s)
-                except Exception as e:
-                    missing[s] = "订阅不了"
-                    print(f"{s} 订阅不了：{type(e).__name__} {e}")
+        stop = o - SUBSCRIBE_STOP
+        quotes, missing = subscribe(api, symbols, stop, clock)
+        if not quotes:  # 连上了但行情不来（有同事的电脑 11-03、11-09 各出过一次）：断开重连一次，多半能救回来
+            print(f"{clock():%H:%M:%S} 一个合约都没订阅上，断开重连一次")
+            put(jf, state | {"状态": "等待", "红": True, "提示": f"竞价判断：天勤没行情，重连一次（{clock():%H:%M:%S}）"})
+            try:
+                api.close()
+            except Exception as e:
+                print(f"断开出错（接着重连）：{type(e).__name__} {e}")
+            api = connect_until(o, jf, state, clock)
+            quotes, missing = subscribe(api, symbols, stop, clock)
         for s, q in list(quotes.items()):
             if q.expired:
                 missing[s] = "已到期"
                 del quotes[s]
         if not quotes:
-            raise RuntimeError("一个合约都没订阅上：" + "、".join(f"{s} {w}" for s, w in missing.items()))
+            raise NoQuotes("天勤没行情（重连后还是一个合约都没订阅上）：" + "、".join(f"{s} {w}" for s, w in missing.items()))
         before, late = {}, []
         for s, q in quotes.items():
             t = when(q.datetime)
@@ -1328,7 +1357,8 @@ def run_live(force: bool, overlay: bool) -> None:
     except Exception as e:
         import traceback
         print(f"竞价判断出错：{type(e).__name__} {e}\n{traceback.format_exc()}")
-        put(jf, state | {"状态": "出错", "红": True, "提示": f"竞价判断出错（{type(e).__name__}），这次没有判断，看运行日志"})
+        why = "天勤没行情（重连也没用）" if isinstance(e, NoQuotes) else f"竞价判断出错（{type(e).__name__}）"
+        put(jf, state | {"状态": "出错", "红": True, "提示": f"{why}，这次没有判断，看运行日志"})
     wait_overlay(proc)
     print(f"===== {datetime.now() + timedelta(seconds=skew):%H:%M:%S} 竞价判断结束 =====")
 
