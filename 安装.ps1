@@ -65,6 +65,16 @@ $s.WorkingDirectory = $Tick
 $s.Save()
 Write-Host "✔ 桌面快捷方式：$lnk"
 
+# 桌面「重新对看板」：换图、改好 看板.txt 后双击，代替手敲 --test
+$lnk = Join-Path ([Environment]::GetFolderPath("Desktop")) "重新对看板.lnk"
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+$s.TargetPath = $pyw
+$s.Arguments = "`"$(Join-Path $Tick '重新对看板.py')`""
+$s.WorkingDirectory = $Tick
+$s.IconLocation = "C:\Windows\System32\shell32.dll,238"
+$s.Save()
+Write-Host "✔ 桌面快捷方式：$lnk"
+
 # 7. 检查
 Write-Host "`n—— 检查 ——"
 Push-Location $Tick

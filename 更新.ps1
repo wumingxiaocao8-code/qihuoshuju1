@@ -51,6 +51,21 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) { Write-Host "✘ 包装完了但 import 不进来（tqsdk / pandas / numpy / scipy / pillow / openpyxl 里有坏的）。把这段话给 AI 看" -ForegroundColor Red; exit 1 }
 Write-Host "✔ 要用的包都在"
 
+# 桌面「重新对看板」（11-10 加）：更新时补上，已经有就不动；建不成不影响更新
+try {
+    $tick = Join-Path $Here "开盘tick"
+    $lnk = Join-Path ([Environment]::GetFolderPath("Desktop")) "重新对看板.lnk"
+    if ((Test-Path (Join-Path $tick "重新对看板.py")) -and -not (Test-Path $lnk)) {
+        $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+        $s.TargetPath = Join-Path (Split-Path $py) "pythonw.exe"
+        $s.Arguments = "`"$(Join-Path $tick '重新对看板.py')`""
+        $s.WorkingDirectory = $tick
+        $s.IconLocation = "C:\Windows\System32\shell32.dll,238"
+        $s.Save()
+        Write-Host "✔ 桌面新增「重新对看板」：换图、改好 看板.txt 后双击它，不用敲 --test"
+    }
+} catch { Write-Host "桌面快捷方式没建成（不影响更新）：$_" -ForegroundColor Yellow }
+
 # 念一下最新的更新记录
 Write-Host "`n—— 最新的更新记录 ——"
 $lines = Get-Content (Join-Path $Here "更新记录.md") -Encoding UTF8

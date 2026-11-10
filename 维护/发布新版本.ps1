@@ -17,7 +17,7 @@ function Fail($msg) { Write-Host "✘ $msg" -ForegroundColor Red; Pop-Location -
 function Git-Ok { & git -c core.quotepath=false @args; if ($LASTEXITCODE -ne 0) { Fail "git $($args -join ' ') 失败（退出码 $LASTEXITCODE），没发布" } }
 function Staged { @(& git -c core.quotepath=false diff --cached --name-only) | Where-Object { $_ } }
 
-$files = @("竞价判断.py", "竞价浮层.py", "关浮层.pyw", "开盘tick.py", "开盘复盘.py", "成交模型.py", "开盘预估.py", "外盘涨跌.py", "主力表.py", "说明.md")  # 成交模型.py：开盘复盘.py 的排队版模拟要用（11-05 加）；主力表.py：换月看成交量、自己下上期所每日行情（11-07 加）
+$files = @("竞价判断.py", "竞价浮层.py", "关浮层.pyw", "开盘tick.py", "开盘复盘.py", "成交模型.py", "开盘预估.py", "外盘涨跌.py", "主力表.py", "重新对看板.py", "说明.md")  # 成交模型.py：开盘复盘.py 的排队版模拟要用（11-05 加）；主力表.py：换月看成交量、自己下上期所每日行情（11-07 加）
 # 允许发布的路径（相对仓库，/ 分隔）；种子按名字匹配
 $allow = @($files | ForEach-Object { "开盘tick/$_" }) + @("开盘tick/看板.示例.txt", "更新记录.md")
 $allowLike = @("开盘tick/复盘数据/两年回放_*.csv", "开盘tick/复盘数据/腿2盘口_sc.csv")
