@@ -7,7 +7,7 @@
   ✅ 大概率整根开到针附近（真：首笔离针 1 档以内，或比针走得还远）
   ▲ 大概率开不到整根、但离昨收有段距离（半真：首笔偏出门槛、比针小，照样能开到）
   ❌ 大概率假（首笔在门槛以内，几乎没动）
-  ○ 没针（针本身没偏出门槛）  ？ 不判断（有一腿竞价没成交、没收到快照，或还没定门槛的跨品种组合）
+  ○ 没针（针本身没偏出门槛）  ？ 不判断（有一腿竞价没成交、没收到快照，或还没定门槛的跨品种组合；11-10 起有腿进了交割月的也是，见 DELIVERY_SKIP）
 两步：
   1. 先挑 ❌：竞价量分 + 盘口分，合计 ≤ −1 就是 ❌（盘口缺一边时不判 ❌：多半是涨跌停锁住，sc 两年里两腿都锁住的 3 根针都整根开到；
      立刻能成交那边偏出门槛 2 倍以上时也不判 ❌：sc、nr、lu 两年里这样被判 ❌ 的 5 根全开到了门槛外，见 HEAVY）。
@@ -125,7 +125,7 @@ HEAVY = 2.0  # 立刻能成交那边偏出门槛 2 倍以上 = 大机会：不�
 HEAVY_SHOW = ("sc", "nr", "fu", "bu", "ag", "cu", "al", "zn", "pb", "sn", "ni", "ao", "br", "sp", "rb", "hc", "ru", "ss", "nr-ru")  # 浮层只在这几个品种的格子上贴重仓标记（验过的：sc、nr 10-24，fu、bu 10-27，有色和 ao br sp rb hc ru ss 10-31 上期所两年回放，nr-ru 11-05 两年 L2：门槛 8 时重 22 次、每次约是不重的两倍），别的品种只记进 csv 和网页
 FEE_SKIP = ("cu",)  # 手续费贵、不重的扣完费几乎白干的品种：判 ✅▲ 但不重时浮层贴灰框「不重」（10-31，cu 一组开平约 3.3 档）
 RELAX = ("ag", "al", "zn", "pb", "br", "rb", "hc", "ao")  # 第 1 步只有「竞价量分 −1、盘口分 0」时不判 ❌，交给第 2 步（10-31 有色和 br rb hc ao 两年回放；cu、sp、ss、ru 不放，见文件开头）
-TAG_STYLE = {"腿2秒进": "快", "量少": "少", "不重": "灰", "小针": "针", "换月": "换"}  # 浮层按样式上色：「重…」紫底、快 红框、少 黄框、不重 灰框、小针 青框、换月 红框（跟腿2秒进一样）
+TAG_STYLE = {"腿2秒进": "快", "量少": "少", "不重": "灰", "小针": "针", "换月": "换", "交割月": "灰"}  # 交割月（11-10）：灰框，贴在 ？ 后面  # 浮层按样式上色：「重…」紫底、快 红框、少 黄框、不重 灰框、小针 青框、换月 红框（跟腿2秒进一样）
 # 换月（11-07 他定的，测试/2026-11-06_br专项/小结.md）：腿1 开盘前持仓 ÷ 腿2（主力）开盘前持仓 ≥ 这个数 = 持仓已经搬到后月、按成交量算的主力还没换过来，
 # 判 ✅▲ 的针贴红框「换月」、色块关。br 近两年判 ✅▲ 正滑一半：持仓比 < 1 +0.1 / +2.7 档，≥ 1 −1.3 / −1.8 档（2026 前 / 后），21 个换月周期 15 个亏，重 ≥ 3 倍也亏
 ROLL_OFF = {"br": 1.0}
@@ -144,6 +144,12 @@ LEG2_ALWAYS = True  # 11-06 他定的：「腿2秒进」不管针真假、重不
 # 腿2秒进！（11-07 他定的，测试/2026-11-07_腿2秒进档位/小结.md）：腿2秒进且主力（腿2）竞价自己跳了 ≥ 这么多倍门槛 → 浮层写「腿2秒进！」（短名「腿2！」）。
 # 只改字，色块、手数照旧。两年回放这类针腿2 晚半秒平均少 8.2 档，别的腿2秒进只少 0.6 档；None = 不分
 LEG2_STRONG = 2.0
+# 交割月不判断（11-10 他定的）：有一条腿已进交割月的格子（如 11 月的 cu2611-cu2612）一律不判断：档 = 不判断、符号 ？，
+# 不出猜首笔、首笔半、首笔区间和任何标记 / 色块（竞价手数小框照旧），浮层在 ？ 后面贴灰框「交割月」，csv 的「交割月」列记是哪条腿。
+# 两年回放定规则时去掉了交割月腿，规则从没在这类格子上验过；实盘 11-09 早、11-10 早 cu2611-2612 都判 ▲ 贴「打」，模拟 −27、−42 档。
+# 交割月按这次开盘所属交易日的月份算（trade_day：夜盘属于下一个交易日，11-30 周一 21:00 的夜盘属于 12-01，那时 cu2612 已进交割月）；
+# 开盘复盘.in_delivery 是按开盘那个月算的（只给记分卡另列用），月末那一晚夜盘两边会差一个月。False = 回到老样子
+DELIVERY_SKIP = True
 # ---- 薄大（2026-10-30，分析/2026-10-26/腿2控价/小结.md 第 12、14 节）----
 BOOK_SHOW = ("sc",)  # 只有 sc 判薄大（nr、fu、bu、lu 回放里薄大不亏）
 THIN_STEP = 5  # 要吃那边第二档离第一档 ≥ 5 档 = 控价大（他定的）
@@ -168,7 +174,7 @@ CSV_COLS = ["开盘", "组合", "腿1", "腿2", "品种", "档", "符号", "首�
             "立刻能卖", "立刻能买", "托住几成", "盘口分", "合计", "保留比例下", "保留比例上", "保留比例依据", "腿1盘口宽档",
             "腿1竞价手数", "腿1卖一量", "腿1买一量", "腿2竞价手数", "腿2卖一量", "腿2买一量", "一档", "文字", "快照时间", "算好时间", "来源",
             "v1档", "猜首笔", "区间依据", "立刻能成交几倍门槛", "腿1跳空档", "腿2跳空档", "主力动得少", "重仓标记", "近", "首笔半",
-            "腿2台阶2", "腿2要吃五档", "腿2五档均", "腿2平时", "腿2厚薄倍", "腿2平时依据", "薄大", "不重", "远档", "两层手数", "小针", "持仓比", "量比", "换月条件", "换月", "换月缺数", "昨收来源"]
+            "腿2台阶2", "腿2要吃五档", "腿2五档均", "腿2平时", "腿2厚薄倍", "腿2平时依据", "薄大", "不重", "远档", "两层手数", "小针", "持仓比", "量比", "换月条件", "换月", "换月缺数", "昨收来源", "交割月"]
 
 
 # ---------- 判断（实盘、回放、开盘复盘共用） ----------
@@ -432,6 +438,25 @@ def fit_note(fit: dict) -> str:
             "（E = 立刻能成交那边偏几档，X = 针偏几档）")
 
 
+def trade_day(o: datetime):
+    """这次开盘属于哪个交易日（11-10 加，交割月用）：日盘 = 当天；夜盘（21:00）= 下一个工作日（周五夜盘 → 下周一）。
+    不查节假日：长假前一晚没有夜盘，碰不到。"""
+    d = o.date()
+    if o.hour >= 18:
+        d += timedelta(days=1)
+        while d.weekday() >= 5:
+            d += timedelta(days=1)
+    return d
+
+
+def delivery_legs(o: datetime, c1: str, c2: str) -> list[str]:
+    """已进交割月的腿：合约 YYMM ≤ 这次开盘所属交易日的 YYMM（cu2611 在 11 月的交易日就算）。DELIVERY_SKIP = False 时返回空。"""
+    if not DELIVERY_SKIP:
+        return []
+    ym = f"{trade_day(o):%y%m}"
+    return [c for c in (c1, c2) if c[-4:].isdigit() and c[-4:] <= ym]
+
+
 def evaluate(o: datetime, pairs: list, snaps: dict, closes: dict, ticks: dict, past, source: str,
              missing: dict | None = None) -> list[dict]:
     """每组一行：判断 + 首笔区间 + 标签上的字。snaps = {合约: 快照}，closes = {合约: 昨收}，ticks = {合约: 最小变动价位}，
@@ -445,8 +470,13 @@ def evaluate(o: datetime, pairs: list, snaps: dict, closes: dict, ticks: dict, p
         if p1 != p2:  # 跨品种：两腿一档不一样时，价差按小的那个算
             t = min(t, ticks.get(s2) or rv.TICK.get(p2) or t)
         bad = [f"{s.split('.')[-1]} {missing[s]}" for s in (s1, s2) if s in missing]
+        dlv = delivery_legs(o, c1, c2)  # 交割月不判断（11-10，DELIVERY_SKIP）
         if bad:
             j = {"档": "不判断", "理由": "、".join(bad)}
+        elif dlv:  # 不出猜首笔、区间、换月、薄大、重仓这些：bad 置成真，下面换月、薄大两段（not bad）就跳过；区间看 dlv
+            j = {"档": "不判断", "交割月": "、".join(dlv),
+                 "理由": f"{'、'.join(dlv)} 已进交割月，不判断：规则没在交割月腿上验过（两年回放定规则时去掉了交割月腿）"}
+            bad = True
         else:
             j = judge(snaps.get(s1), snaps.get(s2), closes.get(s1), closes.get(s2), t,
                       rv.NEEDLE_GATE.get(key), (c1, c2), MIX.get(key), SLACK.get(key, 0), key in RELAX, SMALL.get(key))
@@ -486,7 +516,7 @@ def evaluate(o: datetime, pairs: list, snaps: dict, closes: dict, ticks: dict, p
                "品种": key, **j, "符号": SYMBOL[j["档"]], "一档": t, "来源": source}
         if rg:
             row["区间依据"] = fit_note(fit)
-        else:  # 老办法：盘口两头各 1 档 + 保留比例
+        elif not dlv:  # 老办法：盘口两头各 1 档 + 保留比例（交割月的格子不出区间）
             ret = retention(past, o, j["档"] if j["档"] in ("真", "半真", "假") else None, key)
             rg = first_range(j, t, ret)
             row |= {"保留比例下": round(ret[0], 2), "保留比例上": round(ret[1], 2), "保留比例依据": ret[2],
@@ -505,7 +535,8 @@ def evaluate(o: datetime, pairs: list, snaps: dict, closes: dict, ticks: dict, p
         nd = decimals(t) + 1  # 11-09 起文字只写「首笔估」= 首笔半（csv 的「近」「远档」列照算、不进文字）
         row["文字"] = (f"{name}  首笔 {guess}  首笔估 {row['首笔半']:.{nd}f}\n"  # 两行：浮层把第二行写在下面
                       f"首笔区间 ({price(rg[0], t)} ~ {price(rg[1], t)})" if rg and guess else
-                      f"{name}  首笔 {price(rg[0], t)} ~ {price(rg[1], t)}" if rg else f"{name}  {j['理由']}")
+                      f"{name}  首笔 {price(rg[0], t)} ~ {price(rg[1], t)}" if rg else
+                      f"{name}  " if dlv else f"{name}  {j['理由']}")  # 交割月：浮层去掉组合名后只剩「？」+ 灰框「交割月」（标记见 tags_of）
         for n, s in (("腿1", s1), ("腿2", s2)):  # 竞价成交手数（浮层上标签左边的小框）和竞价后的盘口挂单手数（只记进 csv）
             x = snaps.get(s) or {}
             row[f"{n}竞价手数"], row[f"{n}卖一量"], row[f"{n}买一量"] = x.get("竞价手数"), x.get("卖一量"), x.get("买一量")
@@ -784,7 +815,10 @@ def grouped(d: dict) -> dict:
 
 def tags_of(r: dict) -> list:
     """浮层上的重仓标记 [[字, 样式], …]，贴在符号后面；只有 HEAVY_SHOW 的品种（同品种跨月）贴「重…」那一串。
-    「腿2秒进」11-06 他定的：只要主力动得少，不管针判真假、重不重、哪个品种都贴（LEG2_ALWAYS）。"""
+    「腿2秒进」11-06 他定的：只要主力动得少，不管针判真假、重不重、哪个品种都贴（LEG2_ALWAYS）。
+    交割月不判断的格子（11-10，DELIVERY_SKIP）只贴一个灰框「交割月」（csv 读回来空格是 NaN，所以要看是不是字）。"""
+    if r.get("档") == "不判断" and isinstance(r.get("交割月"), str) and r.get("交割月"):
+        return [["交割月", TAG_STYLE["交割月"]]]
     t = r.get("重仓标记")
     if r.get("品种") in BOOK_SHOW and r.get("薄大") == "薄大":  # 薄大顶替重仓那一串（sc 两年回放：重 + 薄大 也是亏的）
         out = [["薄大", "薄"]]
@@ -932,6 +966,8 @@ def build_page(rows: list, o: datetime, info: dict) -> str:
     body = [f"<style>{css}</style><h1>竞价判断 {o:%Y-%m-%d %H:%M}（{rv.session_of(o)}{'，回放' if info['回放'] else ''}）</h1>",
             f"<p class='meta'>{rv.esc(info['说明'])}。{counts(rows)}</p>",
             "<p class='note'>✅ 大概率整根开到针附近（真）；▲ 大概率开不到整根、但离昨收有段距离（半真）；❌ 大概率假；○ 没针；？ 不判断。"
+            + ("有一条腿已进交割月（按这次开盘所属交易日的月份，夜盘算下一个交易日）的格子一律 ？ 不判断、浮层贴灰框「交割月」（11-10 起：规则没在交割月腿上验过）。"
+               if DELIVERY_SKIP else "") +
             "定了门槛的品种都用混合版（2026-10-24 从 sc 两年回放定的，同一晚推到所有品种；只有 sc、nr、lu 用两年回放验过）；"
             "都只是线索，每次开盘后在开盘复盘的规则五里对答案。</p>"]
     order = {k: i for i, k in enumerate(("真", "半真", "假", "不判断", "没针"))}
@@ -950,6 +986,7 @@ def build_page(rows: list, o: datetime, info: dict) -> str:
                     f"{r['托住几成'] * 100:.0f}%" if r.get("托住几成") is not None else "",
                     rv.fmt(r.get("立刻能成交几倍门槛"), 1), rv.fmt(r.get("合计"), 0, plus=True),
                     f"{rv.fmt(r['腿1跳空档'], 1, plus=True)} / {rv.fmt(r['腿2跳空档'], 1, plus=True)}" if r.get("腿1跳空档") is not None else "",
+                    f"交割月（{r['交割月']}，不判断，浮层贴灰框）" if tags_of(r) == [["交割月", TAG_STYLE["交割月"]]] else
                     ("薄大" + (f"（顶替 {r['重仓标记']}）" if r.get("重仓标记") else "")) if r.get("薄大") == "薄大" else
                     (r["重仓标记"] + ("" if r.get("品种") in HEAVY_SHOW else "（浮层不贴，只记录）")) if r.get("重仓标记") else
                     "不重（手续费贵，浮层贴灰框）" + ("、腿2秒进" if LEG2_ALWAYS and leg2_slow(r) else "") if r.get("不重") == "不重" else

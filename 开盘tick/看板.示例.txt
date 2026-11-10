@@ -4,9 +4,9 @@
 # 竞价判断.py 会把这里的组合和 合约.txt 的一起判断（这里有、合约.txt 没有的也判断，只是开盘后不取 tick、不复盘）。
 # 换了图就改这里，再跑一次：python 竞价浮层.py --test
 INE.sc2701,INE.sc2612    INE.nr2612,SHFE.ru2701    SHFE.fu2612,SHFE.fu2701    SHFE.bu2612,SHFE.bu2701
-SHFE.ss2701,SHFE.ss2612  SHFE.br2701,SHFE.br2612   SHFE.fu2702,SHFE.fu2701    SHFE.bu2702,SHFE.bu2701
-SHFE.ao2702,SHFE.ao2701  SHFE.cu2611,SHFE.cu2612   SHFE.al2611,SHFE.al2612    SHFE.ag2701,SHFE.ag2612
-SHFE.ao2612,SHFE.ao2701  SHFE.ru2705,SHFE.ru2701   SHFE.hc2705,SHFE.hc2701    SHFE.ag2702,SHFE.ag2612
+INE.sc2702,INE.sc2612 SHFE.br2701,SHFE.br2612   SHFE.fu2702,SHFE.fu2701    SHFE.bu2702,SHFE.bu2701
+SHFE.ao2702,SHFE.ao2701  SHFE.cu2611,SHFE.cu2612   SHFE.al2611,SHFE.al2612    SHFE.ag2701,SHFE.ag2702
+SHFE.ao2612,SHFE.ao2701  SHFE.ru2705,SHFE.ru2701   SHFE.hc2705,SHFE.hc2701    SHFE.ag2612,SHFE.ag2702
 
 # 位置（按博易云自己的像素算，从窗口里面的左上角算；屏幕缩放 150%，在截图上量出来的要除以 1.5）。
 # 标签对不准时改这里，改完跑 python 竞价浮层.py --test 看。
