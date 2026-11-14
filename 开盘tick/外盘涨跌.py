@@ -20,12 +20,18 @@
   外盘分钟线.csv  这段时间外盘的分钟线，以后想换时间段重算时用
 已经存过的不覆盖（这次取到的更全才覆盖）。
 
+新加坡 20 号胶（11-10 查出来）：东方财富过了 16:45 就把当天 16:45 以前的分钟线暂时隐掉（第二天早上才归档回来），
+往日的 16:46–18:00 又会丢。所以每次取到都攒进「复盘数据/新加坡胶分钟线.csv」，任务计划「新加坡胶快照」16:30 再取一次（--存胶）。
+还是缺当天起点的，这一行不算涨跌、备注写明，不拿前一天的价冒充；第二天数据归档后自动补上。
+
 单独运行（在本文件夹里）：python 外盘涨跌.py    把最近 5 个交易日里还没存的开盘都补上
+                          python 外盘涨跌.py --存胶    只把新加坡 20 号胶的分钟线攒进本地
 """
 import csv
 import json
 import re
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -77,6 +83,10 @@ RAW_HEAD = ["外盘", "数据源", "时间", "收", "高", "低", "成交量"]  
 WAYS = ["https", "http", "curl"]  # 东方财富时不时直接断开 Python 的 https 连接（同一时间 curl 却正常），轮着试；上次成功的排最前
 SINA_REFERER = "https://finance.sina.com.cn"  # 新浪不带这个会拒绝
 MONTH_CODES = "FGHJKMNQUVXZ"  # 期货月份字母：F=1 月 … Z=12 月
+TF_MARKET = "104.TF"  # 新加坡 20 号胶：东方财富的分钟线每天会缺一段，要攒在本地（见文件开头）
+TF_CACHE = HERE / "复盘数据" / "新加坡胶分钟线.csv"
+TF_CACHE_HEAD = ["合约", "时间", "开", "收", "高", "低", "成交量"]
+TF_CACHE_DAYS = 15  # 只留最近这么多天
 # 雅虎从本月往后第几个月开始挑。布伦特 X 月的合约在 X−2 月月底到期，快到期的那个成交量大、持仓却已经移走了，不选
 YAHOO_FIRST_MONTH = {"BZ": 3}
 
@@ -151,7 +161,35 @@ def minute_bars(secid: str) -> tuple[str, list[tuple]]:
         bars.append((datetime.strptime(f[0], "%Y-%m-%d %H:%M"), *(float(x) for x in f[1:6])))
     if not bars:
         raise RuntimeError(f"{secid} 没有分钟线")
+    if secid.startswith(TF_MARKET):
+        bars = merge_tf_cache(secid, bars)
     return data.get("name") or secid, bars
+
+
+def merge_tf_cache(secid: str, bars: list[tuple]) -> list[tuple]:
+    """把这次取到的新加坡胶分钟线和本地攒的合起来（同一分钟以这次取到的为准），写回本地，返回合并后的。
+    本地文件读写出错只打印，照常用这次取到的，不影响开盘 tick。"""
+    try:
+        keep_from, others, merged = datetime.now() - timedelta(days=TF_CACHE_DAYS), [], {}
+        if TF_CACHE.exists():
+            for r in read_rows(TF_CACHE):
+                t = datetime.strptime(r["时间"], "%Y-%m-%d %H:%M")
+                if t < keep_from:
+                    continue
+                if r["合约"] == secid:
+                    merged[t] = (t, *(float(r[k]) for k in TF_CACHE_HEAD[2:]))
+                else:
+                    others.append(r)
+        merged |= {b[0]: b for b in bars}
+        out = sorted(merged.values())
+        rows = others + [[secid, f"{b[0]:%Y-%m-%d %H:%M}", *b[1:]] for b in out if b[0] >= keep_from]
+        tmp = TF_CACHE.with_suffix(".tmp")
+        write_rows(tmp, TF_CACHE_HEAD, rows)
+        tmp.replace(TF_CACHE)
+        return out
+    except Exception as e:
+        print(f"新加坡胶本地分钟线读写出错：{type(e).__name__} {e}")
+        return bars
 
 
 def sina_bars(symbol: str, domestic: bool = False) -> list[tuple]:
@@ -254,6 +292,20 @@ def price_at(bars: list[tuple], times: list[datetime], t: datetime):
     return bars[i - 1] if i else None
 
 
+def start_missing(source: str, bars: list[tuple], times: list[datetime], start: datetime) -> bool:
+    """新加坡胶：起点那会儿外盘在交易（当天起点后面还有线），但起点前的分钟线缺了，price_at 只能找到很早的价
+    （前一天的，或早上 9:03 那次取到的）。东方财富的这条线交易时段里每分钟都有，隔 30 分钟以上就是缺。
+    外盘收了（23:00 起点）或当天放假时，起点后面没有当天的线，不算缺，用上一次收盘的价是对的。"""
+    if TF_MARKET not in source:
+        return False
+    i = bisect_right(times, start)
+    return (bool(i) and i < len(times) and times[i].date() == start.date()
+            and start - times[i - 1] > timedelta(minutes=30))
+
+
+TF_MISSING_NOTE = "当天收盘前的分钟线缺（东方财富 16:45 后暂时隐掉），起点价取不到，不算涨跌"
+
+
 def compute(o: datetime, last: datetime, markets: dict) -> tuple[list[dict], list[list]]:
     """一次开盘：每个品种一行涨跌，加上用到的外盘分钟线。"""
     end = o - timedelta(minutes=30)
@@ -272,6 +324,8 @@ def compute(o: datetime, last: datetime, markets: dict) -> tuple[list[dict], lis
             a, b = price_at(bars, times, start), price_at(bars, times, end)
             if a is None:
                 notes.append("外盘数据不够早" + ("" if note else "（只能往回取 5 个交易日）"))
+            elif start_missing(src, bars, times, start):
+                notes.append(TF_MISSING_NOTE)
             elif not (a[2] and b[2]):
                 notes.append("外盘价格是 0，数据有问题")
             else:
@@ -363,5 +417,15 @@ def run(out: Path = HERE / "数据") -> None:
         print(f"外盘涨跌出错：{type(e).__name__} {e}")
 
 
+def save_tf() -> None:
+    """只把新加坡胶的分钟线攒进本地（任务计划「新加坡胶快照」16:30，赶在东方财富隐掉当天数据之前）。"""
+    try:
+        secid = main_contract("104.TF*")
+        _, bars = minute_bars(secid)
+        print(f"新加坡胶 {secid}：本地现在到 {bars[-1][0]:%m-%d %H:%M}，共 {len(bars)} 根")
+    except Exception as e:
+        print(f"新加坡胶快照出错：{type(e).__name__} {e}")
+
+
 if __name__ == "__main__":
-    run()
+    save_tf() if "--存胶" in sys.argv else run()

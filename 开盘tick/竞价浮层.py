@@ -416,27 +416,34 @@ OFF_WHEN_LIGHT = ("cu", "sn", "pb")  # 判 ✅▲ 但不重 → 关（铜手续�
 CAP_NORMAL = ("pb",)  # 重了也只到「打」（铅首个半秒只有 1–2 手）
 OFF_WHEN_LEG2 = ()  # 同事版：有「腿2」不直接关，照通用的写「小」（作者版 ru ag br cu 关）；发布时由 维护/同事版改动.py 改
 DOWN = {"重": "打", "打": "小", "小": "小"}
+# 11-14 他定的（测试/2026-11-14_前四tick负作用/小结.md）：
+# sc 判 ❌ → 小（不再关）：实盘 sc ❌ 有针开盘第一下才出来的（11-06 夜真钱 +6,239），模拟 sc ❌ 7 格 +1,049，是唯一明显赚钱的 ❌ 品种；
+#   但 11-10、11-12 夜 sc2702 第一下偏出门槛后一直不回、照做各亏一千多，所以只到「小」。建议只接开盘那一下、不追。
+SMALL_WHEN_CROSS = ("sc",)
+# 腿2秒进不降成小：重 ≥ LEG2_KEEP_HEAVY 倍且主力（腿2）自己跳 < LEG2_KEEP_G 倍门槛（浮层「腿2 1.x」）。两年回放 27 笔（不含 ru ag br cu），
+#   腿2 晚 1 秒每笔 +1.77 门槛倍、胜 78%、前后两段都正；别的组合（重 < 5 或腿2 ≥ 2）照旧一律小。None = 不放开
+LEG2_KEEP_HEAVY, LEG2_KEEP_G = 5, 2
 ROLL_OFF_ANY = ("br",)  # 换月只占一条也关的品种（br 专项：持仓比 ≥ 1 时连重 ≥ 3 倍都亏），跟 竞价判断.ROLL_OFF 一致
 
 
-def verdict(key: str, kind: str, tags) -> tuple[str, str] | None:
+def verdict(key: str, kind: str, tags, leg2_x: float | None = None) -> tuple[str, str] | None:
     """浮层色块：(重 / 打 / 小 / 关, 原因)；没针、不判断返回 None（不贴色块，标签照老样子）。
-    规则照 分析/2026-10-31/有色开盘/小结.md 第 9 节的手数表，10-31 晚他定了两处：腿2秒进降一级（11-06 改成一律「小」，判 ❌、关的照旧关）；
+    规则照 分析/2026-10-31/有色开盘/小结.md 第 9 节的手数表，10-31 晚他定了两处：腿2秒进降一级（11-06 改成一律「小」，判 ❌、关的照旧关；11-14 起重 ≥ 5 且腿2 < 2 倍不降、sc 判 ❌ → 小）；
     sc nr fu bu 和 ss br ao sp rb hc ru 不重也算「打」。只是线索，不是买卖建议。"""
     if kind in ("没针", "不判断"):
         return None
+    p = re.match(r"[a-z]+", key).group(0)
     if kind == "假":
-        return "关", "判❌"
+        return ("小", "判❌·sc小") if p in SMALL_WHEN_CROSS else ("关", "判❌")
     names = [t.rstrip("！") for t, _ in tags]  # 「腿2秒进！」只是字更重，色块照「腿2秒进」算
     heavy = next((float(t[1:]) for t in names if re.fullmatch(r"重\d+(\.\d+)?", t)), None)
-    p = re.match(r"[a-z]+", key).group(0)
     if "薄大" in names:
         return "关", "薄大"
     roll = next((t for t, _ in tags if t.startswith("换月")), None)
     if roll:  # 11-07 换月分级（竞价判断.ROLL_ALL）：换月2 / 换月！→ 关；换月（只占持仓、成交量一条）→ 降一级；br 一条就关
         if roll != "换月" or p in ROLL_OFF_ANY:
             return "关", roll
-        v = verdict(key, kind, [x for x in tags if not x[0].startswith("换月")])
+        v = verdict(key, kind, [x for x in tags if not x[0].startswith("换月")], leg2_x)
         return (v if v is None or v[0] == "关" else (DOWN[v[0]], v[1] + "·换月"))
     if "腿2秒进" in names and p in OFF_WHEN_LEG2:
         return "关", "腿2秒进"
@@ -456,8 +463,11 @@ def verdict(key: str, kind: str, tags) -> tuple[str, str] | None:
     if p in CAP_NORMAL and level == "重":
         level = "打"
     if "腿2秒进" in names:  # 11-06 他定的：有腿2秒进一律「小」（以前是降一级，重 → 打）
-        why.append("腿2秒进")
-        level = "小"
+        if (LEG2_KEEP_HEAVY is not None and leg2_x is not None and heavy >= LEG2_KEEP_HEAVY and leg2_x < LEG2_KEEP_G):
+            why.append(f"腿2 {leg2_x:g}倍不降")  # 11-14：重 ≥ 5 且腿2 < 2 倍门槛，不降
+        else:
+            why.append("腿2秒进")
+            level = "小"
     return level, "·".join(why)
 
 
@@ -596,7 +606,7 @@ def draw(img, rect, board: dict, items: dict, note: dict | None, show: set | Non
                 text = re.sub(r"\n?首笔区间 \([^)]*\)", "", text)
                 text = re.sub(r"^首笔 \S+ ~ \S+$", "", text)  # 只有区间的（○ ？ 和第 1 步的 ❌）只剩符号
             text = short(text)
-            v = verdict(key, kind, tags) if VERDICT else None  # 「重 / 打 / 小 / 关」色块（要用全称的标记，放在缩短之前）
+            v = verdict(key, kind, tags, leg2_x) if VERDICT else None  # 「重 / 打 / 小 / 关」色块（要用全称的标记，放在缩短之前）
             lead = ((v[0], "V" + v[0]),) if v else ()
             tags = tuple((short_tag(t, leg2_x), st) for t, st in tags)
             if BELOW:  # 11-02 夜他定的：标签放在「套利分析」公式那一行下面一行，左边跟「套」字对齐；竞价手数框再下面一行，也左对齐
@@ -751,8 +761,10 @@ def head_boxes(rect, board: dict) -> dict:
     out = {}
     for i, j, key, x0, y0, x1, y1 in cells(rect, board):
         if key:  # 宽高按固定值取整，免得行线的小数让同一格每次截的大小差 1 像素
-            left, top = round(x0 - rect[0] + 2 * k), round(y0 - rect[1] + k)
-            out[(i, j)] = (left, top, left + round((x1 - x0) * HEAD_W - 2 * k), top + round((HEAD_H - 1) * k))
+            # 11-13：往里缩，避开点中格子的白边框和行线（原来点了别的格子，那格和存样子时点中的那格都报「对不上」）
+            dl, dt = round(2 * k), round(3.5 * k)
+            left, top = round(x0 - rect[0] + 2 * k) + dl, round(y0 - rect[1] + k) + dt
+            out[(i, j)] = (left, top, left + round((x1 - x0) * HEAD_W - 2 * k) - dl, top + round((HEAD_H - 1) * k) - dt)
     return out
 
 

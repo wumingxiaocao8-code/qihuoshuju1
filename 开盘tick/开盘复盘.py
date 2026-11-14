@@ -440,11 +440,11 @@ def analyze(folder: Path, open_ts: datetime, s1: str, s2: str, closes: dict, fc)
         else:
             notes.append(f"{p} 还没定针的门槛，不判断真假")
     rec |= overseas_saved(folder, p, open_ts)
-    if fc is not None:  # 预估.csv 里记的外盘涨跌就是预估时用的，优先用它
+    if fc is not None:  # 预估.csv 里记的外盘涨跌就是预估时用的，优先用它；20 号胶例外：预估那会儿东方财富常缺当天的线，以存下的分钟线为准（11-10）
         r = fc[fc["组合"] == rec["组合"]]
         if len(r):
             r = r.iloc[0]
-            if num(r.get("外盘涨跌%")) is not None:
+            if p != "nr" and num(r.get("外盘涨跌%")) is not None:
                 rec |= {"外盘涨跌%": num(r["外盘涨跌%"]), "外盘时段": r.get("外盘时段"), "外盘来源": r.get("外盘来源")}
             rec |= forecast_fields(r)
             if "腿2预估" in rec:
@@ -674,7 +674,7 @@ def signal_cols(j: dict, o: datetime) -> dict:
         except Exception:
             pass  # 补不出来就当没有换月
     tags = jd.tags_of(j)
-    v = jd.fl.verdict(j["组合"], kind, tags)
+    v = jd.fl.verdict(j["组合"], kind, tags, jd.leg2_times(j))  # 11-14：腿2 倍数决定重 ≥ 5 的腿2秒进降不降
     return {"浮层标记": " ".join(w for w, _ in tags), "色块": v[0] if v else "", "色块原因": v[1] if v else ""}
 
 

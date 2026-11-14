@@ -196,6 +196,8 @@ def overseas_move(m, start: datetime, now: datetime, live: bool):
     a, b = wp.price_at(m["bars"], m["times"], start), wp.price_at(m["bars"], m["times"], end)
     if a is None or b is None or not a[2] or not b[2]:
         return None, f"外盘数据不够早（{m['数据源']} 最早到 {m['times'][0]:%m-%d %H:%M}）"
+    if wp.start_missing(m["数据源"], m["bars"], m["times"], start):
+        return None, wp.TF_MISSING_NOTE
     r, end_t, src = b[2] / a[2], b[0], m["数据源"]
     if "实时" in m and b[0] < now - timedelta(minutes=2):  # 雅虎晚了：b 之后的涨跌用新浪实时补上
         sb, st, code = m["实时"]
